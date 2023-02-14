@@ -20,6 +20,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.DiffUtil;
@@ -52,6 +53,7 @@ import com.github.tvbox.osc.util.LOG;
 import com.github.tvbox.osc.viewmodel.SourceViewModel;
 import com.orhanobut.hawk.Hawk;
 import com.owen.tvrecyclerview.widget.TvRecyclerView;
+import com.owen.tvrecyclerview.widget.V7GridLayoutManager;
 import com.owen.tvrecyclerview.widget.V7LinearLayoutManager;
 
 import org.greenrobot.eventbus.EventBus;
@@ -77,6 +79,7 @@ public class HomeActivity extends BaseActivity {
     private SourceViewModel sourceViewModel;
     private SortAdapter sortAdapter;
     private HomePageAdapter pageAdapter;
+    private View currentView;
     private List<BaseLazyFragment> fragments = new ArrayList<>();
     private boolean isDownOrUp = false;
     private boolean sortChange = false;
@@ -133,17 +136,32 @@ public class HomeActivity extends BaseActivity {
         this.mGridView.setOnItemListener(new TvRecyclerView.OnItemListener() {
             public void onItemPreSelected(TvRecyclerView tvRecyclerView, View view, int position) {
                 if (view != null && !HomeActivity.this.isDownOrUp) {
-                    view.animate().scaleX(1.0f).scaleY(1.0f).setDuration(300).start();
-                    TextView textView = view.findViewById(R.id.tvTitle);
-                    textView.getPaint().setFakeBoldText(false);
-                    textView.setTextColor(HomeActivity.this.getResources().getColor(R.color.color_BBFFFFFF));
-                    textView.invalidate();
-                    view.findViewById(R.id.tvFilter).setVisibility(View.GONE);
+                    mHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            TextView textView = view.findViewById(R.id.tvTitle);
+                            textView.getPaint().setFakeBoldText(false);
+                            if (sortFocused == p) {
+                                view.animate().scaleX(1.1f).scaleY(1.1f).setInterpolator(new BounceInterpolator()).setDuration(300).start();
+                                textView.setTextColor(HomeActivity.this.getResources().getColor(R.color.color_FFFFFF));
+                            } else {
+                                view.animate().scaleX(1.0f).scaleY(1.0f).setDuration(300).start();
+                                textView.setTextColor(HomeActivity.this.getResources().getColor(R.color.color_BBFFFFFF));
+                                view.findViewById(R.id.tvFilter).setVisibility(View.GONE);
+                                view.findViewById(R.id.tvFilterColor).setVisibility(View.GONE);
+                            }
+                            textView.invalidate();
+                        }
+
+                        public View v = view;
+                        public int p = position;
+                    }, 10);
                 }
             }
 
             public void onItemSelected(TvRecyclerView tvRecyclerView, View view, int position) {
                 if (view != null) {
+                    HomeActivity.this.currentView = view;
                     HomeActivity.this.isDownOrUp = false;
                     HomeActivity.this.sortChange = true;
                     view.animate().scaleX(1.1f).scaleY(1.1f).setInterpolator(new BounceInterpolator()).setDuration(300).start();
@@ -151,8 +169,10 @@ public class HomeActivity extends BaseActivity {
                     textView.getPaint().setFakeBoldText(true);
                     textView.setTextColor(HomeActivity.this.getResources().getColor(R.color.color_FFFFFF));
                     textView.invalidate();
-                    if (!sortAdapter.getItem(position).filters.isEmpty())
-                        view.findViewById(R.id.tvFilter).setVisibility(View.VISIBLE);
+                    MovieSort.SortData sortData = sortAdapter.getItem(position);
+                    if (!sortData.filters.isEmpty()) {
+                        showFilterIcon(sortData.filterSelectCount());
+                    }
                     HomeActivity.this.sortFocusView = view;
                     HomeActivity.this.sortFocused = position;
                     mHandler.removeCallbacks(mDataRunnable);
@@ -172,6 +192,7 @@ public class HomeActivity extends BaseActivity {
                 }
             }
         });
+
         this.mGridView.setOnInBorderKeyEventListener(new TvRecyclerView.OnInBorderKeyEventListener() {
             public final boolean onInBorderKeyEvent(int direction, View view) {
                 if (direction != View.FOCUS_DOWN) {
@@ -186,6 +207,26 @@ public class HomeActivity extends BaseActivity {
                     return true;
                 }
                 return false;
+            }
+        });
+        tvName.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dataInitOk = false;
+                jarInitOk = true;
+                showSiteSwitch();
+            }
+        });
+        tvName.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                Intent intent = new Intent(getApplicationContext(), HomeActivity.class);
+                intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                Bundle bundle = new Bundle();
+                bundle.putBoolean("useCache", true);
+                intent.putExtras(bundle);
+                HomeActivity.this.startActivity(intent);
+                return true;
             }
         });
         setLoadSir(this.contentLayout);
@@ -390,6 +431,10 @@ public class HomeActivity extends BaseActivity {
         BaseLazyFragment baseLazyFragment = this.fragments.get(i);
         if (baseLazyFragment instanceof GridFragment) {
             View view = this.sortFocusView;
+            GridFragment grid = (GridFragment) baseLazyFragment;
+            if (grid.restoreView()) {
+                return;
+            }// 还原上次保存的UI内容
             if (view != null && !view.isFocused()) {
                 this.sortFocusView.requestFocus();
             } else if (this.sortFocused != 0) {
@@ -404,6 +449,11 @@ public class HomeActivity extends BaseActivity {
 
     private void exit() {
         if (System.currentTimeMillis() - mExitTime < 2000) {
+            //这一段借鉴来自 q群老哥 IDCardWeb
+            EventBus.getDefault().unregister(this);
+            AppManager.getInstance().appExit(0);
+            ControlManager.get().stopServer();
+            finish();
             super.onBackPressed();
         } else {
             mExitTime = System.currentTimeMillis();
@@ -434,7 +484,17 @@ public class HomeActivity extends BaseActivity {
                 newIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 HomeActivity.this.startActivity(newIntent);
             }
+        } else if (event.type == RefreshEvent.TYPE_FILTER_CHANGE) {
+            if (currentView != null) {
+                showFilterIcon((int) event.obj);
+            }
         }
+    }
+
+    private void showFilterIcon(int count) {
+        boolean visible = count > 0;
+        currentView.findViewById(R.id.tvFilterColor).setVisibility(visible ? View.VISIBLE : View.GONE);
+        currentView.findViewById(R.id.tvFilter).setVisibility(visible ? View.GONE : View.VISIBLE);
     }
 
     private Runnable mDataRunnable = new Runnable() {
@@ -459,8 +519,11 @@ public class HomeActivity extends BaseActivity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (topHide < 0)
             return false;
+        int keyCode = event.getKeyCode();
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
-
+            if (keyCode == KeyEvent.KEYCODE_MENU) {
+                showSiteSwitch();
+            }
         } else if (event.getAction() == KeyEvent.ACTION_UP) {
 
         }
@@ -540,13 +603,26 @@ public class HomeActivity extends BaseActivity {
     void showSiteSwitch() {
         List<SourceBean> sites = ApiConfig.get().getSourceBeanList();
         if (sites.size() > 0) {
-            String homeSourceKey = ApiConfig.get().getHomeSourceBean().getKey();
             SelectDialog<SourceBean> dialog = new SelectDialog<>(HomeActivity.this);
+            TvRecyclerView tvRecyclerView = dialog.findViewById(R.id.list);
+            int spanCount;
+            spanCount = (int)Math.floor(sites.size()/60);
+            spanCount = Math.min(spanCount, 2);
+            tvRecyclerView.setLayoutManager(new V7GridLayoutManager(dialog.getContext(), spanCount+1));
+            ConstraintLayout cl_root = dialog.findViewById(R.id.cl_root);
+            ViewGroup.LayoutParams clp = cl_root.getLayoutParams();
+            clp.width = AutoSizeUtils.mm2px(dialog.getContext(), 380+200*spanCount);
             dialog.setTip("请选择首页数据源");
             dialog.setAdapter(new SelectDialogAdapter.SelectDialogInterface<SourceBean>() {
                 @Override
                 public void click(SourceBean value, int pos) {
                     ApiConfig.get().setSourceBean(value);
+                    Intent intent = new Intent(getApplicationContext(), HomeActivity.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    Bundle bundle = new Bundle();
+                    bundle.putBoolean("useCache", true);
+                    intent.putExtras(bundle);
+                    HomeActivity.this.startActivity(intent);
                 }
 
                 @Override
@@ -564,24 +640,7 @@ public class HomeActivity extends BaseActivity {
                     return oldItem.getKey().equals(newItem.getKey());
                 }
             }, sites, sites.indexOf(ApiConfig.get().getHomeSourceBean()));
-            dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
-                @Override
-                public void onDismiss(DialogInterface dialog) {
-                    if (homeSourceKey != null && !homeSourceKey.equals(Hawk.get(HawkConfig.HOME_API, ""))) {
-                        Intent intent = getApplicationContext().getPackageManager().getLaunchIntentForPackage(getApplication().getPackageName());
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                        Bundle bundle = new Bundle();
-                        bundle.putBoolean("useCache", true);
-                        intent.putExtras(bundle);
-                        getApplicationContext().startActivity(intent);
-                        android.os.Process.killProcess(android.os.Process.myPid());
-                        System.exit(0);
-                    }
-                }
-            });
             dialog.show();
         }
     }
-
 }
