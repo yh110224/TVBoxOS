@@ -4,12 +4,16 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.Environment;
+import android.util.Base64;
 
 import com.github.tvbox.osc.R;
 import com.github.tvbox.osc.api.ApiConfig;
+import com.github.tvbox.osc.base.App;
+import com.github.tvbox.osc.event.RefreshEvent;
 import com.github.tvbox.osc.event.ServerEvent;
 import com.github.tvbox.osc.util.FileUtils;
 import com.github.tvbox.osc.util.OkGoHelper;
+import com.github.tvbox.osc.util.Proxy;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -22,10 +26,13 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -116,6 +123,39 @@ public class RemoteServer extends NanoHTTPD {
                                     mime,
                                     stream
                             );
+                            if(rs.length>=4){
+                                HashMap<String, String> mapHeader = (HashMap<String, String>) rs[3];
+                                if(!mapHeader.isEmpty()){
+                                    for (String key : mapHeader.keySet()) {
+                                        response.addHeader(key, mapHeader.get(key));
+                                    }
+                                }
+                            }
+                            return response;
+                        } catch (Throwable th) {
+                            return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.INTERNAL_ERROR, NanoHTTPD.MIME_PLAINTEXT, "500");
+                        }
+                    }
+                    if (params.containsKey("go")) {
+                        Object[] rs = Proxy.proxy(params);
+                        try {
+                            assert rs != null;
+                            int code = (int) rs[0];
+                            String mime = (String) rs[1];
+                            InputStream stream = rs[2] != null ? (InputStream) rs[2] : null;
+                            Response response = NanoHTTPD.newChunkedResponse(
+                                    NanoHTTPD.Response.Status.lookup(code),
+                                    mime,
+                                    stream
+                            );
+                            if(rs.length>=4){
+                                HashMap<String, String> mapHeader = (HashMap<String, String>) rs[3];
+                                if(!mapHeader.isEmpty()){
+                                    for (String key : mapHeader.keySet()) {
+                                        response.addHeader(key, mapHeader.get(key));
+                                    }
+                                }
+                            }
                             return response;
                         } catch (Throwable th) {
                             return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.INTERNAL_ERROR, NanoHTTPD.MIME_PLAINTEXT, "500");
@@ -148,6 +188,31 @@ public class RemoteServer extends NanoHTTPD {
                         rs = new byte[0];
                     }
                     return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/dns-message", new ByteArrayInputStream(rs), rs.length);
+                } else if (fileName.startsWith("/push/")) {
+                    String url = fileName.substring(6);
+                    if (url.startsWith("b64:")) {
+                        try {
+                            url = new String(Base64.decode(url.substring(4), Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP), "UTF-8");
+                        } catch (UnsupportedEncodingException e) {
+                            e.printStackTrace();
+                        }
+                    } else {
+                        url = URLDecoder.decode(url);
+                    }
+                    EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_PUSH_URL, url));
+                    return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, NanoHTTPD.MIME_PLAINTEXT, "ok");    
+                }  else if (fileName.startsWith("/dash/")) {
+                    String dashData = App.getInstance().getDashData();
+                    try {
+                        String data = new String(Base64.decode(dashData, Base64.DEFAULT | Base64.NO_WRAP), "UTF-8");
+                        return NanoHTTPD.newFixedLengthResponse(
+                                Response.Status.OK,
+                                "application/dash+xml",
+                                data
+                        );
+                    } catch (Throwable th) {
+                        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.INTERNAL_ERROR, NanoHTTPD.MIME_PLAINTEXT, dashData);
+                    }
                 }
             } else if (session.getMethod() == Method.POST) {
                 Map<String, String> files = new HashMap<String, String>();
